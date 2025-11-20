@@ -288,3 +288,223 @@ type Puller interface {
 	Pull(r *Record) error
 }
 ```
+
+## I/O interfaces
+
+### Reader and Writer
+
+[Reader](https://pkg.go.dev/io#Reader)
+[Writer](https://pkg.go.dev/io#Writer)
+[Copy](https://pkg.go.dev/io#example-Copy)
+
+### Composing reader and writer
+
+```go
+package main
+
+import (
+	"compress/gzip"
+	"io"
+	"log"
+	"net/http"
+	"os"
+	"strings"
+)
+
+var data = []byte(`
+“Hope” is the thing with feathers -
+That perches in the soul -
+And sings the tune without the words -
+And never stops - at all -
+`)
+
+func poemHandler(w http.ResponseWriter, r *http.Request) {
+	var wtr io.Writer = w
+	accept := r.Header.Get("Accept-Encoding")
+	if strings.Contains(accept, "gzip") {
+		w.Header().Set("Content-Encoding", "gzip")
+		gz := gzip.NewWriter(w)
+		defer gz.Close()
+		wtr = gz
+	}
+
+	n, err := wtr.Write(data)
+	if err != nil || n < len(data) {
+		log.Printf("ERROR: bad write size=%d, written=%d, error=%s", len(data), n, err)
+	}
+}
+
+func main() {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/poem", poemHandler)
+
+	addr := ":8080"
+	log.Printf("INFO: server starting on %s", addr)
+	srv := http.Server{
+		Addr:    ":8080",
+		Handler: mux,
+	}
+	if err := srv.ListenAndServe(); err != nil {
+		log.Printf("ERROR: can't run - %s", err)
+		os.Exit(1)
+	}
+}
+```
+
+```sh
+curl -H 'Accept-Encoding: gzip' http://localhost:8080/poem | gunzip
+```
+
+### In memory readers and writes
+
+[Buffer](https://pkg.go.dev/bytes#example-Buffer)
+
+```go
+package markdown
+
+import (
+	"bytes"
+	"fmt"
+)
+
+// List renders a slice of item to a markdown list.
+func List(items []string) string {
+	var buf bytes.Buffer
+
+	for _, item := range items {
+		fmt.Fprintf(&buf, "- %s\n", item)
+	}
+	return buf.String()
+}
+```
+
+### Implementing reader and writer
+
+```go
+package rotate
+
+import (
+	"fmt"
+	"os"
+	"path"
+)
+
+type Rotator struct {
+	rootPath string
+	n        int
+	maxSize  int
+	size     int
+	out      *os.File
+}
+
+func New(rootPath string, maxSize int) (*Rotator, error) {
+	if err := os.MkdirAll(rootPath, 0700); err != nil {
+		return nil, err
+	}
+
+	r := Rotator{
+		rootPath: rootPath,
+		maxSize:  maxSize,
+	}
+	if err := r.rotate(); err != nil {
+		return nil, err
+	}
+
+	return &r, nil
+}
+
+func (r *Rotator) Write(data []byte) (int, error) {
+	if n, err := r.out.Write(data); err != nil {
+		return n, err
+	}
+
+	r.size += len(data)
+	if r.size > r.maxSize {
+		if err := r.rotate(); err != nil {
+			return len(data), err
+		}
+	}
+
+	return len(data), nil
+}
+
+func (r *Rotator) Close() error {
+	if r.out == nil {
+		return nil
+	}
+
+	return r.out.Close()
+}
+
+func (r *Rotator) rotate() error {
+	if r.out != nil {
+		r.out.Close()
+	}
+
+	r.n++
+	fileName := path.Join(r.rootPath, fmt.Sprintf("log-%02d.txt", r.n))
+	file, err := os.Create(fileName)
+	if err != nil {
+		return err
+	}
+
+	r.size = 0
+	r.out = file
+	return nil
+}
+```
+
+### Challenge: counting lines
+
+```go
+package main
+
+import (
+	"compress/gzip"
+	"fmt"
+	"io"
+	"os"
+)
+
+type LineCount struct {
+	n int
+}
+
+func (l *LineCount) Write(data []byte) (int, error) {
+	for _, c := range data {
+		if c == '\n' {
+			l.n++
+		}
+	}
+
+	return len(data), nil
+}
+
+func (l *LineCount) Len() int {
+	return l.n
+}
+
+func main() {
+	const fileName = "roads.txt.gz"
+	file, err := os.Open(fileName)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %s\n", err)
+		os.Exit(1)
+	}
+	defer file.Close()
+
+	r, err := gzip.NewReader(file)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %q - %s\n", fileName, err)
+		os.Exit(1)
+	}
+
+	var w LineCount
+	if _, err := io.Copy(&w, r); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %q - %s\n", fileName, err)
+		os.Exit(1)
+	}
+
+	fmt.Println(w.Len())
+}
+```
