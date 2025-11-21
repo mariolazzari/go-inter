@@ -720,3 +720,146 @@ func (e *Error) Format(f fmt.State, verb rune) {
 	fmt.Fprint(f, e.Error())
 }
 ```
+
+## Empty interface
+
+### What is any
+
+[any](youtube.com/watch?v=PAAkCSZUG1c&t=7m36s)
+
+```go
+package main
+
+import (
+	"fmt"
+	"sync"
+)
+
+func main() {
+	var pool sync.Pool
+
+	for i := 0; i < 5; i++ {
+		buf := make([]byte, 1024)
+		pool.Put(buf)
+	}
+
+	out := pool.Get()
+	buf, ok := out.([]byte)
+	if !ok {
+		fmt.Printf("ERROR: not a []byte - %#v (%T)\n", out, out)
+		return
+	}
+
+	fmt.Println(len(buf))
+}
+```
+
+### Reflection
+
+[reflect](https://pkg.go.dev/reflect)
+
+```go
+package event
+
+import (
+	"encoding/json"
+	"fmt"
+	"reflect"
+	"time"
+)
+
+type LoginEvent struct {
+	Time  time.Time
+	Login string
+}
+
+type AccessEvent struct {
+	Time   time.Time
+	Login  string
+	URI    string
+	Action string
+}
+
+func Unmarshal(data []byte, v any) error {
+	if reflect.TypeOf(v).Kind() != reflect.Pointer {
+		return fmt.Errorf("%T - not a pointer", v)
+	}
+
+	switch v.(type) {
+	case *AccessEvent, *LoginEvent:
+		// OK
+	default:
+		return fmt.Errorf("%T - unsupported type", v)
+	}
+
+	return json.Unmarshal(data, v)
+}
+```
+
+### Generics to avoid any
+
+```go
+package event
+
+import (
+	"encoding/json"
+	"time"
+)
+
+type LoginEvent struct {
+	Time  time.Time
+	Login string
+}
+
+type AccessEvent struct {
+	Time   time.Time
+	Login  string
+	URI    string
+	Action string
+}
+
+type Event interface {
+	*AccessEvent | *LoginEvent
+}
+
+func Unmarshal[T Event](data []byte, v T) error {
+	return json.Unmarshal(data, v)
+}
+```
+
+### Challegne: wrapping sync
+
+```go
+package pool
+
+import "sync"
+
+type Pool[T any] struct {
+	pool sync.Pool
+}
+
+func New[T any](newFn func() T) *Pool[T] {
+	var p Pool[T]
+	if newFn != nil {
+		p.pool.New = func() any {
+			return newFn()
+		}
+	}
+
+	return &p
+}
+
+func (p *Pool[T]) Put(v T) {
+	p.pool.Put(v)
+}
+
+func (p *Pool[T]) Get() (T, bool) {
+	v := p.pool.Get()
+	if v == nil {
+		var zero T
+		return zero, false
+	}
+
+	return v.(T), true
+}
+```
