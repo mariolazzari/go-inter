@@ -508,3 +508,215 @@ func main() {
 	fmt.Println(w.Len())
 }
 ```
+
+## Interfaces that change behavior
+
+### String representation
+
+[Stringer](https://pkg.go.dev/golang.org/x/tools/cmd/stringer)
+[Gostringer](https://pkg.go.dev/github.com/sourcegraph/gostringer)
+
+```go
+package auth
+
+import "fmt"
+
+type Permission byte
+
+const (
+	Read Permission = iota + 1
+	Write
+	Admin
+)
+
+// String implements fmt.Stringer
+func (p Permission) String() string {
+	switch p {
+	case Read:
+		return "read"
+	case Write:
+		return "write"
+	case Admin:
+		return "admin"
+	}
+
+	return fmt.Sprintf("<Permission: %d>", p)
+}
+```
+
+### Formatter print flags
+
+[format](https://pkg.go.dev/fmt#example-package-Formats)
+
+```go
+package net
+
+import "fmt"
+
+type Address struct {
+	Host string
+	Port int
+}
+
+// Format implements fmt.Formatter
+func (a Address) Format(f fmt.State, verb rune) {
+	switch verb {
+	case 'H':
+		fmt.Fprintf(f, a.Host)
+		return
+	case 'P':
+		fmt.Fprintf(f, "%d", a.Port)
+		return
+	case 'v':
+		switch {
+		case f.Flag('+'):
+			fmt.Fprintf(f, "{Host: %s Port: %d}", a.Host, a.Port)
+			return
+		case f.Flag('#'):
+			fmt.Fprintf(f, "%T{Host: %q Port: %d}", a, a.Host, a.Port)
+			return
+		}
+	}
+
+	fmt.Printf("{%s %d}", a.Host, a.Port)
+}
+```
+
+### Marshaler and Unmarshaler
+
+[Marshaler](https://pkg.go.dev/encoding/json#Marshaler)
+[Unmarshaler](https://pkg.go.dev/encoding/json#Unmarshaler)
+
+```go
+package stack
+
+import (
+	"encoding/json"
+	"errors"
+)
+
+type node struct {
+	value rune
+	next  *node
+}
+
+type Stack struct {
+	head *node
+}
+
+// Push pushes a value to the stack.
+func (s *Stack) Push(r rune) {
+	s.head = &node{r, s.head}
+}
+
+var ErrEmpty = errors.New("empty stack")
+
+// Pop pops an value from the stack.
+func (s *Stack) Pop() (rune, error) {
+	if s.head == nil {
+		return 0, ErrEmpty
+	}
+
+	v := s.head.value
+	s.head = s.head.next
+	return v, nil
+}
+
+// Len returns the number of elements in the stack.
+func (s *Stack) Len() int {
+	count := 0
+
+	for n := s.head; n != nil; n = n.next {
+		count++
+	}
+
+	return count
+}
+
+// MarshalJSON implements json.Marshaler
+func (s Stack) MarshalJSON() ([]byte, error) {
+	values := make([]string, s.Len())
+
+	i := 0
+	for n := s.head; n != nil; n = n.next {
+		values[i] = string(n.value)
+		i++
+	}
+
+	return json.Marshal(values)
+}
+```
+
+### Challenge: custom error
+
+```go
+package stacked
+
+import (
+	"bytes"
+	"fmt"
+	"path"
+	"runtime"
+)
+
+type Error struct {
+	cause error
+	stack string
+}
+
+func Wrap(err error) error {
+	if err == nil {
+		return nil
+	}
+
+	var buf bytes.Buffer
+	fmt.Fprintf(&buf, "%s\n\n", err)
+	fmt.Fprintf(&buf, callStack())
+
+	s := Error{
+		cause: err,
+		stack: buf.String(),
+	}
+
+	return &s
+}
+
+func callStack() string {
+	var buf bytes.Buffer
+	pcs := make([]uintptr, 20)
+
+	n := runtime.Callers(3, pcs)
+	if n > 0 {
+		frames := runtime.CallersFrames(pcs[:n])
+
+		for {
+			fr, more := frames.Next()
+			if fr.Function == "runtime.main" || fr.Function == "testing.runExample" {
+				break
+			}
+
+			fmt.Fprintln(&buf, fr.Function)
+			fmt.Fprintf(&buf, "\t%s:%d\n", path.Base(fr.File), fr.Line)
+
+			if !more {
+				break
+			}
+		}
+	}
+
+	return buf.String()
+}
+
+func (e *Error) Error() string {
+	return e.cause.Error()
+}
+
+func (e *Error) Format(f fmt.State, verb rune) {
+	if verb == 'v' && f.Flag('+') {
+		fmt.Fprint(f, e.stack)
+		return
+	}
+
+	fmt.Fprint(f, e.Error())
+}
+```

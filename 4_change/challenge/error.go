@@ -8,21 +8,25 @@ import (
 )
 
 type Error struct {
-	// TODO
+	cause error
+	stack string
 }
 
 func Wrap(err error) error {
-	// TODO
-	return nil
-}
+	if err == nil {
+		return nil
+	}
 
-func (e *Error) Error() string {
-	// TODO
-	return ""
-}
+	var buf bytes.Buffer
+	fmt.Fprintf(&buf, "%s\n\n", err)
+	fmt.Fprintf(&buf, callStack())
 
-func (e *Error) Format(f fmt.State, verb rune) {
-	// TODO
+	s := Error{
+		cause: err,
+		stack: buf.String(),
+	}
+
+	return &s
 }
 
 func callStack() string {
@@ -49,4 +53,17 @@ func callStack() string {
 	}
 
 	return buf.String()
+}
+
+func (e *Error) Error() string {
+	return e.cause.Error()
+}
+
+func (e *Error) Format(f fmt.State, verb rune) {
+	if verb == 'v' && f.Flag('+') {
+		fmt.Fprint(f, e.stack)
+		return
+	}
+
+	fmt.Fprint(f, e.Error())
 }
